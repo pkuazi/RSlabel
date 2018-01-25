@@ -11,7 +11,7 @@ from geomtrans import GeomTrans
 from shp2json import Shp2Json
 
 
-class ImageMask:
+class MaskImage:
     def __init__(self, geomjson=None, geomproj=None, rsimage=None):
         self.geomjson = geomjson
         self.geomproj = geomproj
@@ -77,7 +77,7 @@ class ImageMask:
                                            all_touched=True, dtype=np.uint8)
         return window, mask
 
-def main(geomjson, geomproj, raster, tag, name):
+def mask_image_by_geometry(geomjson, geomproj, raster, tag, name):
     print('the %s geometry' % name)
     transform = GeomTrans(str(geomproj), str(raster.crs.wkt))
     geojson_crs_transformed = transform.transform_points(geomjson['coordinates'][0])
@@ -141,7 +141,7 @@ if __name__ == '__main__':
     geoproj = vector.crs_wkt
 
     for geojson in geojson_list:
-        maskrs = ImageMask(geojson, geoproj, raster)
+        maskrs = MaskImage(geojson, geoproj, raster)
         shifted_affine = maskrs._get_transform()
         data = maskrs.get_data()
         print(data.shape)
