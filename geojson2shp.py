@@ -15,7 +15,7 @@ def geojson2shp(geojson, shpdst, id):
     '''
     # an example Shapely geometry
     coordinates = geojson['coordinates']
-    poly = Polygon(coordinates)
+    poly = Polygon(coordinates[0])
 
     # Define a polygon feature geometry with one attribute
     schema = {
