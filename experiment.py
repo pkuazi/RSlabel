@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 # -*-coding:utf-8 -*-
-# created by 'root' on 18-1-25
+# created by 'zjh' on 18-1-25
 
 from osmquery_utils import Tag, Bbox, OverpassApi
-from maskimage import MaskImage
+from maskimage import mask_image_by_geojson_polygon
 import rasterio
-import os
+import os, ogr
 import numpy as np
+from geojson2shp import geojson2shp
 
 if __name__ == '__main__':
     # # define query conditions
@@ -18,13 +19,14 @@ if __name__ == '__main__':
     # query = overpassapi._get_query(bbox, tag, False, True, True)
     # results = overpassapi._try_overpass_download(query)
 
-    data_path = os.getcwd() + '/data'
+    data_path = os.getcwd() + '/cache'
     # for inner beijing
     bbox_bjurban = Bbox(39.946, 116.348, 40.006, 116.425)
-    urban_image = os.path.join(data_path, 'GF1_PMS2_E116.5_N39.9_20151012_L1A0001093940-MSS2.tiff')
+    urban_image = os.path.join(data_path, 'urban.tif')
+    # urban_image = '/mnt/win/image/GF1/add_crs/GF1_PMS2_E116.5_N39.9_20151012_L1A0001093940-MSS2.tiff'
 
-    bbox_bjrural = Bbox(40.095, 116.142, 40.155, 116.224)
-    rural_image = os.path.join(data_path, 'GF1_PMS1_E116.1_N40.0_20151012_L1A0001094174-MSS1.tiff')
+    # bbox_bjrural = Bbox(40.095, 116.142, 40.155, 116.224)
+    # rural_image = os.path.join(data_path, 'rural.tif')
 
     tag = {Tag('landuse','residential')}
 
@@ -37,10 +39,26 @@ if __name__ == '__main__':
     geoproj = 'EPSG:4326'
     urban_image = rasterio.open(urban_image, 'r')
     for geojson in urban_results['features']:
+        id = geojson['id']
+
         geometry= geojson['geometry']
-        maskrs = MaskImage(geometry, geoproj, urban_image)
-        shifted_affine = maskrs._get_transform()
-        data = maskrs.get_data()
+
+        shpdst ="%s/%s.shp" % (dst_path,geojson['id'])
+        geojson2shp(geometry,shpdst, id)
+
+        if geometry['type'] == 'LineString':
+            geometry={'type':'Polygon', 'coordinates':[geometry['coordinates']]}
+
+
+        result = mask_image_by_geojson_polygon(geometry, 'EPSG:4326', urban_image)
+        if result is None:
+            print("the polygon is not within the raster boundary")
+            continue
+
+        # the data cut by the polygon, and its geotransform
+        data = result[0]
+        shifted_affine = result[1]
+
         print(data.shape)
 
         with rasterio.open("%s/%s.tif" % (dst_path,geojson['id']), 'w', driver='GTiff', width=data.shape[2], height=data.shape[1],
@@ -48,21 +66,21 @@ if __name__ == '__main__':
                            indexes=urban_image.indexes) as dst:
             dst.write(data.astype(rasterio.uint16))
 
-    overpassapi = OverpassApi()
-    rural_query = overpassapi._get_query(bbox_bjrural, tag, False, True, True)
-    rural_results = overpassapi._try_overpass_download(rural_query)
-
-    rural_image = rasterio.open(rural_image, 'r')
-    for geojson in urban_results['features']:
-        geometry = geojson['geometry']
-        maskrs = MaskImage(geojson, geoproj, rural_image)
-        shifted_affine = maskrs._get_transform()
-        data = maskrs.get_data()
-        print(data.shape)
-
-        with rasterio.open("%s/%s.tif" % (dst_path,geojson['id']), 'w', driver='GTiff', width=data.shape[2], height=data.shape[1],
-                           crs=rural_image.crs, transform=shifted_affine, dtype=np.uint16, nodata=256, count=data.shape[0],
-                           indexes=rural_image.indexes) as dst:
-            dst.write(data.astype(rasterio.uint16))
+    # overpassapi = OverpassApi()
+    # rural_query = overpassapi._get_query(bbox_bjrural, tag, False, True, True)
+    # rural_results = overpassapi._try_overpass_download(rural_query)
+    #
+    # rural_image = rasterio.open(rural_image, 'r')
+    # for geojson in urban_results['features']:
+    #     geometry = geojson['geometry']
+    #     maskrs = MaskImage(geojson, geoproj, rural_image)
+    #     shifted_affine = maskrs._get_transform()
+    #     data = maskrs.get_data()
+    #     print(data.shape)
+    #
+    #     with rasterio.open("%s/%s.tif" % (dst_path,geojson['id']), 'w', driver='GTiff', width=data.shape[2], height=data.shape[1],
+    #                        crs=rural_image.crs, transform=shifted_affine, dtype=np.uint16, nodata=256, count=data.shape[0],
+    #                        indexes=rural_image.indexes) as dst:
+    #         dst.write(data.astype(rasterio.uint16))
 
 
