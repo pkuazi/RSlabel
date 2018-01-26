@@ -33,16 +33,16 @@ def osm_cut_raster(bbox, tag, image):
 
         geometry = geojson['geometry']
 
-        shpdst = "%s/%s.shp" % (dst_path, geojson['id'])
-        geojson2shp(geometry, shpdst, id)
-
         if geometry['type'] == 'LineString':
             geometry = {'type': 'Polygon', 'coordinates': [geometry['coordinates']]}
 
         result = mask_image_by_geojson_polygon(geometry, geoproj, raster)
         if result is None:
-            print("the polygon is not within the raster boundary")
+            # print("the polygon is not within the raster boundary")
             continue
+
+        shpdst = "%s/%s.shp" % (dst_path, geojson['id'])
+        geojson2shp(geometry, shpdst, id)
 
         # the data cut by the polygon, and its geotransform
         data = result[0]
@@ -70,11 +70,11 @@ if __name__ == '__main__':
     tag = {Tag('landuse', 'residential')}
 
     # for inner beijing
-    bbox_bjurban = Bbox(39.946, 116.348, 40.006, 116.425)
-    urban_image = os.path.join(data_path, 'urban.tif')
-    # urban_image = '/mnt/win/image/GF1/add_crs/GF1_PMS2_E116.5_N39.9_20151012_L1A0001093940-MSS2.tiff'
-
-    osm_cut_raster(bbox_bjurban, tag, urban_image)
+    # bbox_bjurban = Bbox(39.946, 116.348, 40.006, 116.425)
+    # urban_image = os.path.join(data_path, 'urban.tif')
+    # # urban_image = '/mnt/win/image/GF1/add_crs/GF1_PMS2_E116.5_N39.9_20151012_L1A0001093940-MSS2.tiff'
+    #
+    # osm_cut_raster(bbox_bjurban, tag, urban_image)
 
     # for northwest rurual of beijing
     bbox_bjrural = Bbox(40.095, 116.142, 40.155, 116.224)
