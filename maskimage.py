@@ -17,7 +17,11 @@ class MaskImage:
         self.geomproj = geomproj
         self.raster = rsimage
         transform = GeomTrans(str(self.geomproj), str(self.raster.crs.wkt))
-        geojson_crs_transformed = transform.transform_points(self.geomjson['coordinates'][0])
+        if geomjson['type']=='Polygon':
+            geojson_crs_transformed = transform.transform_points(self.geomjson['coordinates'][0])
+        elif geomjson['type']=='LineString':
+            geojson_crs_transformed = transform.transform_points(self.geomjson['coordinates'])
+        print(geojson_crs_transformed)
         geometry = shape({'coordinates': [geojson_crs_transformed], 'type': 'Polygon'})
         self.geometry = geometry
 
@@ -76,6 +80,55 @@ class MaskImage:
         mask = rasterio.features.rasterize([(self.geometry, 0)], out_shape=data.shape, transform=shifted_affine, fill=1,
                                            all_touched=True, dtype=np.uint8)
         return window, mask
+
+def mask_image_by_geojson_polygon(geojson_polygon, geoproj, raster):
+    '''
+
+    :param geojson_polygon: the geojson format of a polygon
+    :param geoproj: the projection coordinate system of the input polygon
+    :param raster:  the raster data after executing the raster = rasterio.open(raster_image_file, 'r')
+    :return: the data cut out from the raster by the polygon, and its geotransformation
+    '''
+    transform = GeomTrans(str(geoproj), str(raster.crs.wkt))
+    geojson_crs_transformed = transform.transform_points(geojson_polygon['coordinates'][0])
+    geometry = shape({'coordinates': [geojson_crs_transformed], 'type': 'Polygon'})
+
+    bbox = raster.bounds
+    extent = [[bbox.left, bbox.top], [bbox.left, bbox.bottom], [bbox.right, bbox.bottom], [bbox.right, bbox.top]]
+    raster_boundary = shape({'coordinates': [extent], 'type': 'Polygon'})
+
+    # if not geometry.intersects(raster_boundary):
+    #     return
+    if not geometry.within(raster_boundary):
+        print('the geometry is not within the raster image')
+        return
+
+    # get pixel coordinates of the geometry's bounding box,
+    ll = raster.index(*geometry.bounds[0:2])  # lowerleft bounds[0:2] xmin, ymin
+    ur = raster.index(*geometry.bounds[2:4])  # upperright bounds[2:4] xmax, ymax
+
+    # create an affine transform for the subset data
+    t = raster.transform
+    shifted_affine = Affine(t.a, t.b, t.c + ll[1] * t.a, t.d, t.e, t.f + ur[0] * t.e)
+
+    # read the subset of the data into a numpy array
+    window = ((ur[0], ll[0] + 1), (ll[1], ur[1] + 1))
+    bands_num = raster.count
+    multi_bands_data = []
+    for i in range(bands_num):
+        # band_name = raster.indexes[i]
+        data = raster.read(i + 1, window=window)
+        # rasterize the geometry
+        mask = rasterio.features.rasterize([(geometry, 0)], out_shape=data.shape, transform=shifted_affine, fill=1,
+                                           all_touched=True, dtype=np.uint8)
+
+        # create a masked numpy array
+        masked_data = np.ma.array(data=data, mask=mask.astype(bool), dtype=np.float32)
+        masked_data.data[masked_data.mask] = np.nan  # raster.profile nodata is 256
+        out_image = masked_data.data
+        multi_bands_data.append(out_image)
+    out_data = np.array(multi_bands_data)
+    return out_data, shifted_affine
 
 def mask_image_by_geometry(geomjson, geomproj, raster, tag, name):
     print('the %s geometry' % name)
@@ -141,6 +194,8 @@ if __name__ == '__main__':
     geoproj = vector.crs_wkt
 
     for geojson in geojson_list:
+        mask_image_by_geometry(geojson, 'EPSG:4326', raster, 1, 1)
+
         maskrs = MaskImage(geojson, geoproj, raster)
         shifted_affine = maskrs._get_transform()
         data = maskrs.get_data()
