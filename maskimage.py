@@ -153,25 +153,33 @@ def mask_image_by_geometry(geomjson, geomproj, raster, tag, name):
 
     # read the subset of the data into a numpy array
     window = ((ur[0], ll[0] + 1), (ll[1], ur[1] + 1))
-    bands_num = raster.count
-    multi_bands_data = []
-    for i in range(bands_num):
-        # band_name = raster.indexes[i]
-        data = raster.read(i + 1, window=window)
-        # rasterize the geometry
-        mask = rasterio.features.rasterize([(geometry, 0)], out_shape=data.shape, transform=shifted_affine, fill=1,
-                                           all_touched=True, dtype=np.uint8)
 
-        # create a masked numpy array
-        masked_data = np.ma.array(data=data, mask=mask.astype(bool), dtype=np.float32)
-        masked_data.data[masked_data.mask] = np.nan  # raster.profile nodata is 256
-        out_image = masked_data.data
-        multi_bands_data.append(out_image)
-    out_data = np.array(multi_bands_data)
-    with rasterio.open("/tmp/mask_%s.tif" % name, 'w', driver='GTiff', width=out_data.shape[2],
-                       height=out_data.shape[1], crs=raster.crs, transform=shifted_affine, dtype=np.uint16, nodata=256,
-                       count=bands_num, indexes=raster.indexes) as dst:
-        dst.write(out_image.astype(rasterio.uint16), 1)
+    out_data = raster.read(window=window)
+    with rasterio.open("/tmp/mask_%s.tif" % name, 'w', driver='GTiff', width=out_data.shape[2], height=out_data.shape[1], crs=raster.crs,
+                       transform=shifted_affine, dtype=np.uint16, nodata=256, count=raster.count,
+                       indexes=raster.indexes) as dst:
+        # Write the src array into indexed bands of the dataset. If `indexes` is a list, the src must be a 3D array of matching shape. If an int, the src must be a 2D array.
+        dst.write(out_data.astype(rasterio.uint16), indexes=raster.indexes)
+
+    # bands_num = raster.count
+    # multi_bands_data = []
+    # for i in range(bands_num):
+    #     # band_name = raster.indexes[i]
+    #     data = raster.read(i + 1, window=window)
+    #     # rasterize the geometry
+    #     mask = rasterio.features.rasterize([(geometry, 0)], out_shape=data.shape, transform=shifted_affine, fill=1,
+    #                                        all_touched=True, dtype=np.uint8)
+    #
+    #     # create a masked numpy array
+    #     masked_data = np.ma.array(data=data, mask=mask.astype(bool), dtype=np.float32)
+    #     masked_data.data[masked_data.mask] = np.nan  # raster.profile nodata is 256
+    #     out_image = masked_data.data
+    #     multi_bands_data.append(out_image)
+    # out_data = np.array(multi_bands_data)
+    # with rasterio.open("/tmp/mask_%s.tif" % name, 'w', driver='GTiff', width=out_data.shape[2],
+    #                    height=out_data.shape[1], crs=raster.crs, transform=shifted_affine, dtype=np.uint16, nodata=256,
+    #                    count=bands_num, indexes=raster.indexes) as dst:
+    #     dst.write(out_image.astype(rasterio.uint16), 1)
 
     # create a masked label numpy array
     label_array = np.zeros_like(data, dtype=np.float32)
