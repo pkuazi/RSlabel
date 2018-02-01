@@ -17,6 +17,8 @@ from shapely.geometry import shape
 from geomtrans import GeomTrans
 from shp2json import Shp2Json
 import os
+import gdal
+
 
 def mask_image_by_geometry(geomjson, geomproj, raster, tag, name):
     print('the %s geometry' % name)
@@ -40,18 +42,48 @@ def mask_image_by_geometry(geomjson, geomproj, raster, tag, name):
     shifted_affine = Affine(t.a, t.b, t.c + ll[1] * t.a, t.d, t.e, t.f + ur[0] * t.e)
 
     # read the subset of the data into a numpy array
-    window = ((ur[0], ll[0] + 1), (ll[1], ur[1] + 1))
+    window = ((ur[0], ll[0] + 1), (ll[1], ur[1] + 1))  # rows, cols of ((xmax, xmin+1),(ymin, ymax+1))
+    window_shape = ((window[0][1] - window[0][0]),
+                    (window[1][1] - window[1][0]))  # or data = raster.read(1,window=window); out_shape = data.shape;
+
+
+    # to generate 512*512 size mask
+    if window_shape[0] <= 512 and window_shape[1] <= 512:
+        mask = rasterio.features.rasterize([(geometry, 0)], out_shape=window_shape, transform=shifted_affine, fill=1,
+                                           all_touched=True, dtype=np.uint8)
+        out_shape = np.zeros((512, 512))
+        # expand the window of rasterized polygon into 512*512
+        mask_expanded = np.pad(mask, ((0, 512 - window_shape[0]), (0, 512 - window_shape[1])), mode='constant',
+                               constant_values=1)
+
+        # generate label array
+        label_array = np.empty_like(mask_expanded,dtype=np.float)
+        label_array[mask_expanded == 0] = tag
+        with rasterio.open("/tmp/label_%s.tif" % name, 'w', driver='GTiff', width=512, height=512,
+                           crs=raster.crs, transform=shifted_affine, dtype=np.uint16, nodata=256, count=1) as dst:
+            dst.write(label_array.astype(rasterio.uint16), 1)
+
+        # read the original rs image in 512*512
+        window_expanded = ((window[0][0], window[0][0] + 512), (window[1][0], window[1][0] + 512))
+        out_data = raster.read(window= window_expanded)
+        with rasterio.open("/tmp/mask_%s2.tif" % name, 'w', driver='GTiff', width=512,height=512, crs=raster.crs, transform=shifted_affine, dtype=np.uint16,nodata=256,count=raster.count, indexes=raster.indexes) as dst:
+            # Write the src array into indexed bands of the dataset. If `indexes` is a list, the src must be a 3D array of matching shape. If an int, the src must be a 2D array.
+            dst.write(out_data.astype(rasterio.uint16), indexes =raster.indexes)
+
+
+
+    window_expanded = ((window[0][0], window[0][0] + 512), (window[1][0], window[1][0] + 512))
     bands_num = raster.count
     multi_bands_data = []
     for i in range(bands_num):
         # band_name = raster.indexes[i]
-        data = raster.read(i + 1, window=window)
+        data = raster.read(i + 1, window=window_expanded)
         # rasterize the geometry
-        mask = rasterio.features.rasterize([(geometry, 0)], out_shape=data.shape, transform=shifted_affine, fill=1,
-                                           all_touched=True, dtype=np.uint8)
+        # mask = rasterio.features.rasterize([(geometry, 0)], out_shape=data.shape, transform=shifted_affine, fill=1,
+        #                                    all_touched=True, dtype=np.uint8)
 
         # create a masked numpy array
-        masked_data = np.ma.array(data=data, mask=mask.astype(bool), dtype=np.float32)
+        masked_data = np.ma.array(data=data, mask=mask_expanded.astype(bool), dtype=np.float32)
         masked_data.data[masked_data.mask] = np.nan  # raster.profile nodata is 256
         out_image = masked_data.data
         multi_bands_data.append(out_image)
@@ -61,17 +93,9 @@ def mask_image_by_geometry(geomjson, geomproj, raster, tag, name):
                        count=bands_num, indexes=raster.indexes) as dst:
         dst.write(out_image.astype(rasterio.uint16), 1)
 
-    # create a masked label numpy array
-    label_array = np.zeros_like(data, dtype=np.float32)
-    label_array[mask == 0] = tag
-    with rasterio.open("/tmp/label_%s.tif" % name, 'w', driver='GTiff', width=out_image.shape[1],
-                       height=out_image.shape[0], crs=raster.crs, transform=shifted_affine, dtype=np.uint16, nodata=256,
-                       count=1) as dst:
-        dst.write(label_array.astype(rasterio.uint16), 1)
-
 
 if __name__ == '__main__':
-    tag = {Tag('landuse', 'residential'), Tag('building','residential')}
+    tag = {Tag('landuse', 'residential'), Tag('building', 'residential')}
 
     # for inner beijing
     bbox = Bbox(39.946, 116.348, 40.006, 116.425)
@@ -85,7 +109,7 @@ if __name__ == '__main__':
     dst_path = os.getcwd() + '/cache'
 
     geoproj = 'EPSG:4326'
-    raster  = rasterio.open(image, 'r')
+    raster = rasterio.open(image, 'r')
     for geojson in urban_results['features']:
         id = geojson['id']
 
@@ -94,8 +118,7 @@ if __name__ == '__main__':
         if geometry['type'] == 'LineString':
             geometry = {'type': 'Polygon', 'coordinates': [geometry['coordinates']]}
 
-        result = mask_image_by_geometry(geometry, geoproj, raster, tag=1, name = 'building')
+        result = mask_image_by_geometry(geometry, geoproj, raster, tag=255, name='building')
         if result is None:
             # print("the polygon is not within the raster boundary")
             continue
-
