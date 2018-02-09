@@ -155,6 +155,9 @@ def mask_image_by_geometry(geomjson, geomproj, raster, tag, name):
     window = ((ur[0], ll[0] + 1), (ll[1], ur[1] + 1))
 
     out_data = raster.read(window=window)
+    if len(out_data)==0:
+        print('the grid does not intersect with the raster')
+        return
     with rasterio.open("/tmp/mask_%s.tif" % name, 'w', driver='GTiff', width=out_data.shape[2], height=out_data.shape[1], crs=raster.crs,
                        transform=shifted_affine, dtype=np.uint16, nodata=256, count=raster.count,
                        indexes=raster.indexes) as dst:
@@ -182,10 +185,12 @@ def mask_image_by_geometry(geomjson, geomproj, raster, tag, name):
     #     dst.write(out_image.astype(rasterio.uint16), 1)
 
     # create a masked label numpy array
-    label_array = np.zeros_like(data, dtype=np.float32)
+    out_shape = ((window[0][1]-window[0][0]), (window[1][1]-window[1][0]))
+    mask = rasterio.features.rasterize([(geometry, 0)], out_shape=out_shape, transform=shifted_affine, fill=1,all_touched=True, dtype=np.uint8)
+    label_array = np.empty(out_shape)
     label_array[mask == 0] = tag
-    with rasterio.open("/tmp/label_%s.tif" % name, 'w', driver='GTiff', width=out_image.shape[1],
-                       height=out_image.shape[0], crs=raster.crs, transform=shifted_affine, dtype=np.uint16, nodata=256,
+    with rasterio.open("/tmp/label_%s.tif" % name, 'w', driver='GTiff', width=out_shape[1],
+                       height=out_shape[0], crs=raster.crs, transform=shifted_affine, dtype=np.uint16, nodata=256,
                        count=1) as dst:
         dst.write(label_array.astype(rasterio.uint16), 1)
 
@@ -202,15 +207,15 @@ if __name__ == '__main__':
     geoproj = vector.crs_wkt
 
     for geojson in geojson_list:
-        mask_image_by_geometry(geojson, 'EPSG:4326', raster, 1, 1)
+        mask_image_by_geometry(geojson, 'EPSG:4326', raster, 200, 1)
 
-        maskrs = MaskImage(geojson, geoproj, raster)
-        shifted_affine = maskrs._get_transform()
-        data = maskrs.get_data()
-        print(data.shape)
-
-        with rasterio.open("/tmp/mask_%s.tif" % 'band1', 'w', driver='GTiff', width=data.shape[2], height=data.shape[1],
-                           crs=raster.crs, transform=shifted_affine, dtype=np.uint16, nodata=256, count=data.shape[0],
-                           indexes=raster.indexes) as dst:
-            dst.write(data.astype(rasterio.uint16))
+        # maskrs = MaskImage(geojson, geoproj, raster)
+        # shifted_affine = maskrs._get_transform()
+        # data = maskrs.get_data()
+        # print(data.shape)
+        #
+        # with rasterio.open("/tmp/mask_%s.tif" % 'band1', 'w', driver='GTiff', width=data.shape[2], height=data.shape[1],
+        #                    crs=raster.crs, transform=shifted_affine, dtype=np.uint16, nodata=256, count=data.shape[0],
+        #                    indexes=raster.indexes) as dst:
+        #     dst.write(data.astype(rasterio.uint16))
             # dst.write(data[0].astype(rasterio.uint16), data.shape[0])
