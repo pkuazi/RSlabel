@@ -85,6 +85,12 @@ def storeinshp(osm_results, dst_shp):
         fgd.name = id
         fgd.type = ogr.wkbPolygon
         ffd.AddGeomFieldDefn(fgd)
+
+        fpd = ogr.FieldDefn()
+        fpd.name = geojson['properties']
+        fpd.type = ogr.OFTString
+        ffd.AddFieldDefn(fpd)
+
         feat = ogr.Feature(ffd)
         feat.SetGeometry(geom)
         lyr.CreateFeature(feat)
@@ -120,17 +126,49 @@ def storeinshp(osm_results, dst_shp):
 #     logger.error(error_message)
 #     raise Exception(error_message)
 
+from shapely.geometry import mapping, Polygon
+import fiona
+from fiona.crs import from_epsg
+def osm2shp(osm_results, dst_shp):
+
+    # Define a polygon feature geometry with one attribute
+    schema = {
+        'geometry': 'Polygon',
+        'properties': {'id': 'int','tags':'str:25'},
+    }
+
+    # Write a new Shapefile
+    with fiona.open(dst_shp, 'w', crs=from_epsg(4326), driver='ESRI Shapefile', schema=schema) as c:
+        ## If there are multiple geometries, put the "for" loop here
+        for geojson in osm_results['features']:
+            id = geojson['id']
+            geometry = geojson['geometry']
+
+            # Here's an example Shapely geometry
+            poly = Polygon(geometry['coordinates'])
+
+            c.write({
+                'geometry': mapping(poly),
+                'properties': {'id': id, 'tags':geojson['properties']},
+            })
+
 
 if __name__ == '__main__':
     # define query conditions
-    bbox = Bbox(116.358, 39.783,116.653,40.03)
-    tag = {Tag('landuse','residential'), Tag('landuse','industrial')} #https://taginfo.openstreetmap.org/keys
+    bbox = Bbox(116.234, 39.89575,116.28955,39.93655)
+    tag = {Tag('landuse','residential'), Tag('landuse','industrial'), Tag('building','yes'), Tag('building', 'house'), Tag('type','building'), Tag('building','apartments')} #https://taginfo.openstreetmap.org/keys
+    # tag = {Tag('highway','road'), Tag('route','road'), Tag('highway','primary'), Tag('highway','secondary')}
 
     # Example of using the Class OverpassApi
     overpassapi = OverpassApi()
     query = overpassapi._get_query(bbox, tag, False, True, True)
     results = overpassapi._try_overpass_download(query)
 
+    num = len(results['features'])
+    print(num, "polygons for this tag", tag)
+    for i in range(num):
+        polygon = results['features'][i]['properties']
+        print(polygon)
     # Example of using the function osm_query_by_overpass
     # overpass = overpass.API(timeout=60)
     # results = osm_query_by_overpass(bbox, tag, False, True, True)
@@ -139,5 +177,5 @@ if __name__ == '__main__':
     # print(results['features'][0].keys())
     # print(results['features'][0]['id'])
     # print(results['features'][0]['properties'])
-    storeinshp(results, '/tmp/results.shp' )
+    osm2shp(results, '/tmp/building_results.shp' )
 
