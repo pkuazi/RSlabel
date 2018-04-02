@@ -61,24 +61,29 @@ GDAL_OPTS = ["COMPRESS=LZW", "INTERLEAVE=PIXEL", "TILED=YES", \
              "SPARSE_OK=TRUE", "BIGTIFF=YES"]
 import re
 def process_TM_metadata(fname):
-    fp = open(fname, 'r')  # Open metadata file
-    lmax = {}  # Dicts to store constants
-    lmin = {}
-    qc_lmax = {}
-    qc_lmin = {}
-    gain = {}
-    bias = {}
+    fp = open(fname, 'r') # Open metadata file
     data = fp.read()
+    files = re.findall(r'FILE_NAME.*?"(.*?)"',data)
     bandfile_list = []
-    bands_name = list(re.findall(r'BAND_COMBINATION.*?"(.*?)"',data)[0])
-    #TM的元数据文件中没有gain和bias
-    for band in bands_name:
-        the_band = 'BAND%s'%band
-        bandfile_list.append( re.findall(r'%s_FILE_NAME.*?"(.*?)"'%the_band, data)[0])
-        lmax[band] = float(re.findall(r' +LMAX_%s.*?= +(.*)'%the_band,data)[0])
-        lmin[band] = float(re.findall(r' +LMIN_%s.*?= +(.*)' % the_band, data)[0])
-        qc_lmax[band]= float(re.findall(r'QCALMAX_%s.*?= +(.*)'%the_band,data)[0])
-        qc_lmin[band] = float(re.findall(r'QCALMIN_%s.*?= +(.*)' % the_band, data)[0])
+    for file in files:
+        if file.endswith(".TIF") or file.endswith('.tif'):
+            bandfile_list.append(file)
+
+    band_num = len(bandfile_list)
+    lmax=re.findall(r'LMAX_.*?= +(.*)',data)[:band_num]
+    lmin=re.findall(r'LMIN_.*?= +(.*)',data)[:band_num]
+    qc_lmin=re.findall(r'QCALMIN_.*?= +(.*)',data)[:band_num]
+    qc_lmax = re.findall(r'QCALMAX_.*?= +(.*)',data)[:band_num]
+
+    # #TM的元数据文件中没有gain和bias
+    # for band in bands_name:
+    #     the_band = 'BAND%s'%band
+    #     bandfile_list.append(re.findall(r'%s_FILE_NAME.*?"(.*?)"' % the_band, data)[0])
+    #     bandfile_list.append( re.findall(r'%s_FILE_NAME.*?"(.*?)"'%the_band, data)[0])
+    #     lmax[band] = float(re.findall(r' +LMAX_%s.*?= +(.*)'%the_band,data)[0])
+    #     lmin[band] = float(re.findall(r' +LMIN_%s.*?= +(.*)' % the_band, data)[0])
+    #     qc_lmax[band]= float(re.findall(r'QCALMAX_%s.*?= +(.*)'%the_band,data)[0])
+    #     qc_lmin[band] = float(re.findall(r'QCALMIN_%s.*?= +(.*)' % the_band, data)[0])
     return (bandfile_list, lmax, lmin, qc_lmax, qc_lmin)
 
 def process_metadata(fname):
@@ -275,26 +280,58 @@ def main():
                             qc_lmin[the_band], options.verbose)
 
 
+import rasterio
+import numpy.ma as ma
 if __name__ == '__main__':
-    bandfile_list, lmax, lmin, qc_lmax, qc_lmin = process_TM_metadata("d:/L5134036_03620050823_MTL.txt")
+    bandfile_list, lmax_list, lmin_list, qc_lmax_list, qc_lmin_list = process_TM_metadata("/mnt/win/water_paper/L5134036_03620050823_MTL.txt")
+    num=0
     for band in bandfile_list:
-        band_path = "d:/"+band
-        cmd = 'gdalformula -expr "(lmax[band]-lmin[band])/(qc_lmax[band]-qc_lmin[band])*(band-qc_lmin[band])+lmin[band]" -stat -co COMPRESS=LZW -ot Float32 -dstfile /mnt/mfs/zjh/qtp/tmp/t05-00qushi.tif "--band=/mnt/mfs/zjh/qtp/qtp_lst/qtp_MODLT1M.20000901.CN.LTD.AVG.V2.TIF"'
+        band_path = os.path.join("/mnt/win/water_paper/",band)
+        dst_file = "/mnt/win/water_paper/%s_c.tif"%band[:-4]
+        lmax = float(lmax_list[num])
+        lmin = float(lmin_list[num])
+        qc_lmax = float(qc_lmax_list[num])
+        qc_lmin = float(qc_lmin_list[num])
 
-    start_time = time.time()
-    parser = optparse.OptionParser(formatter=optparse.TitledHelpFormatter(), \
-                                   usage=globals()['__doc__'])
-    parser.add_option('-v', '--verbose', action='store_true', \
-                      default=False, help='verbose output')
-    parser.add_option('-i', '--input', action='store', dest="input_f", \
-                      type=str, help='Input filename')
+        raster = rasterio.open(band_path, 'r')
+        array = raster.read()
 
-    (options, args) = parser.parse_args()
-    if options.verbose: print(time.asctime())
+        radiance = np.zeros_like(array, dtype=np.float32)
+        # DN to radiance conversion if we have a sensible DN
+        passer = np.logical_and(qc_lmin < array, array < qc_lmax)
+        out_array = np.where(passer,  ((lmax - lmin) / (qc_lmax - qc_lmin)) *  ((array ) - qc_lmin) + lmin,  -999)
 
-    main()
-    if options.verbose: print(time.asctime())
+        max = np.max(out_array)
+        print(max)
 
-    if options.verbose: print('TOTAL TIME IN MINUTES:',)
+        # in_array = array!=0
+        #
+        # in_array = array()
+        # out_array = (lmax-lmin)/(qc_lmax-qc_lmin)*(array-qc_lmin)+lmin
 
-    if options.verbose: print((time.time() - start_time) / 60.0)
+        with rasterio.open(dst_file, 'w', driver='GTiff', width=out_array.shape[2],count=1,
+                           height=out_array.shape[1], crs=raster.crs,
+                           transform=raster.transform, dtype=np.float32, nodata=-999) as dst:
+            dst.write(out_array.astype(np.float32))
+            # Write the src array into indexed bands of the dataset. If `indexes` is a list, the src must be a 3D array of matching shape. If an int, the src must be a 2D array.
+            # dst.write(out_array.astype(rasterio.float32), indexes=raster.indexes)
+
+
+
+    # start_time = time.time()
+    # parser = optparse.OptionParser(formatter=optparse.TitledHelpFormatter(), \
+    #                                usage=globals()['__doc__'])
+    # parser.add_option('-v', '--verbose', action='store_true', \
+    #                   default=False, help='verbose output')
+    # parser.add_option('-i', '--input', action='store', dest="input_f", \
+    #                   type=str, help='Input filename')
+    #
+    # (options, args) = parser.parse_args()
+    # if options.verbose: print(time.asctime())
+    #
+    # main()
+    # if options.verbose: print(time.asctime())
+    #
+    # if options.verbose: print('TOTAL TIME IN MINUTES:',)
+    #
+    # if options.verbose: print((time.time() - start_time) / 60.0)
