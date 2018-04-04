@@ -160,7 +160,7 @@ from sklearn.cluster import KMeans
 
 
 
-def generate_training_samples(label_shp, tag, band_files,exception_band):
+def read_labeled_pixels(label_shp, tag, band_files,exception_band):
     '''
     :param label_shp: label polygons in shapefile format
     :param tag: the class of the polygon
@@ -221,7 +221,12 @@ def generate_training_samples(label_shp, tag, band_files,exception_band):
     return X,Y
 
 
-def get_training_data(file_root,sensor):
+def generate_training_data(file_root,sensor):
+    '''
+    :param file_root: folder of the label shapefiles and corresponding images
+    :param sensor: landsat sensor: TM, ETM, OLI
+    :return:save training pixels and labels into dataframe for each feature_image pair
+    '''
     # for some bands, they have different resolution, so the samples number is not the same as others
     exception_band = {'TM':['6'], 'ETM':['6','8'], 'OLI':['8','10','11']}
 
@@ -250,7 +255,7 @@ def get_training_data(file_root,sensor):
                 tag = tags[feat_name]
 
                 print("generating the training data from the label shapefile")
-                feat_x, feat_y = generate_training_samples(label_shp, tag, band_files, exception_band[sensor])
+                feat_x, feat_y = read_labeled_pixels(label_shp, tag, band_files, exception_band[sensor])
                 result = pd.concat([feat_x, feat_y], axis=1)
 
                 print('the attributes of the label from the images are %s'%feat_x.columns)
@@ -288,13 +293,13 @@ def get_training_data(file_root,sensor):
 
 
 
-def test_get_training_data():
+def test_generate_training_data():
     file_root = '/mnt/win/water_paper/training_data/TM'
-    get_training_data(file_root,'TM')
+    generate_training_data(file_root,'TM')
 
 
 if __name__ == '__main__':
-    test_get_training_data()
+    test_generate_training_data()
 
     # remote_class = Remote_Classification('/mnt/win/water_paper/training_data/data')
     # remote_class.plot_results()
