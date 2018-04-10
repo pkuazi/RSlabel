@@ -215,14 +215,13 @@ def read_labeled_pixels(label_shp, tag, band_files, exception_band):
 
     X = pd.DataFrame(data=X, columns=attributes)
     Y = pd.DataFrame(data=Y, columns=['tag'])
-    print(X)
-    print(Y)
 
     return X, Y
 
 
 def generate_training_data(file_root, sensor):
     '''
+    读取矢量标记的polygon数据，读取对应的栅格像素，注意矢量标记的命名规则：feat_name +‘-‘+影像L5+path+row
     :param file_root: folder of the label shapefiles and corresponding images
     :param sensor: landsat sensor: TM, ETM, OLI
     :return:save training pixels and labels into dataframe for each feature_image pair
@@ -234,8 +233,8 @@ def generate_training_data(file_root, sensor):
     img_dir = os.path.join(file_root, 'image')
     tags = {'water': 1, 'mount_shadow': 2, 'cloud': 3, 'cloud_shadow': 4, 'snow': 5, 'other': 6}
 
-    # 建立results文件夹
-    result_path = os.path.join(file_root, 'results')
+    # 建立存放训练数据csv文件的文件夹
+    result_path = os.path.join(file_root, 'traing_csv')
     if not os.path.exists(result_path):
         os.makedirs(result_path)
 
@@ -256,6 +255,7 @@ def generate_training_data(file_root, sensor):
 
                 print("generating the training data from the label shapefile")
                 feat_x, feat_y = read_labeled_pixels(label_shp, tag, band_files, exception_band[sensor])
+                # print(feat_name, feat_x.shape)
                 result = pd.concat([feat_x, feat_y], axis=1)
 
                 print('the attributes of the label from the images are %s' % feat_x.columns)
@@ -265,78 +265,167 @@ def generate_training_data(file_root, sensor):
 
 
 class Remote_Classification:
-    def __init__(self, file_root, if_stretch=True):
+    def __init__(self, file_root, image_bands_dir, sensor):
         self.file_root = file_root
-        self.training_dir = os.path.join(file_root, 'results')
+        self.training_dir = os.path.join(file_root, 'traing_csv')
+        self.image_bands_dir = image_bands_dir
+        self.sensor = sensor
+
+    def gen_features(self, original_X):
+        '''
+        using the six bands to generate other features, such as all kinds of water indeices
+        :return: new traing X and Y
+        '''
+        band1 = original_X['B10']  # blue
+        band2 = original_X['B20']  # green
+        band3 = original_X['B30']  # red
+        band4 = original_X['B40']  # nir
+        band5 = original_X['B50']  # swir5
+        band7 = original_X['B70']  # swir7
+        NDWI = (band4 - band5) / (band4 + band5)
+        MNDWI = (band2 - band5) / (band2 + band5)
+        EWI = (band2 - band4 - band5) / (band2 + band4 + band5)
+        NEW = (band1 - band7) / (band1 + band7)
+        NDWI_B = (band1 - band4) / (band1 + band4)
+        AWElnsh = 4 * (band2 - band5) - (0.25 * band4 + 2.75 * band7)
+
+        features = pd.concat([NDWI, MNDWI, EWI, NEW, NDWI_B, AWElnsh], axis=1)
+        features.columns = ['NDWI', 'MNDWI', 'EWI', 'NEW', 'NDWI_B', 'AWElnsh']
+        # DataFrame({}data=[NDWI, MNDWI, EWI, NEW, NDWI_B, AWElnsh], columns=['NDWI', 'MNDWI', 'EWI', 'NEW', 'NDWI_B', 'AWElnsh'])
+        # training_X = pd.merge(original_X, features, left_index=True, right_index=True)
+        training_X = pd.concat([original_X, features], axis=1)
+        return training_X
 
     def get_training_data(self):
+        '''
+        read the labeled pixels, and corresponding bands values
+        :return: original training X, that is six bands values
+        '''
+        # training data, the features are the original six band values.
+        for file in os.listdir(self.training_dir):
+            if file.endswith('water.csv'):
+                X_water = pd.read_csv(os.path.join(self.training_dir, file),
+                                      usecols=['B10', 'B20', 'B30', 'B40', 'B50', 'B70'])
+            elif file.endswith('cloud.csv'):
+                X_cloud = pd.read_csv(os.path.join(self.training_dir, file),
+                                      usecols=['B10', 'B20', 'B30', 'B40', 'B50', 'B70'])
+            elif file.endswith('cloud_shadow.csv'):
+                X_cloud_shadow = pd.read_csv(os.path.join(self.training_dir, file),
+                                             usecols=['B10', 'B20', 'B30', 'B40', 'B50', 'B70'])
+            elif file.endswith('mount_shadow.csv'):
+                X_mount_shadow = pd.read_csv(os.path.join(self.training_dir, file),
+                                             usecols=['B10', 'B20', 'B30', 'B40', 'B50', 'B70'])
+            elif file.endswith('snow.csv'):
+                X_snow = pd.read_csv(os.path.join(self.training_dir, file),
+                                     usecols=['B10', 'B20', 'B30', 'B40', 'B50', 'B70'])
+            elif file.endswith('other.csv'):
+                X_other = pd.read_csv(os.path.join(self.training_dir, file),
+                                      usecols=['B10', 'B20', 'B30', 'B40', 'B50', 'B70'])
+        X_nonwater = pd.concat([X_cloud, X_cloud_shadow, X_mount_shadow, X_snow, X_other])
 
-        # training data, the features are the original RGB three values.
-        farm = np.argwhere(self.Y == 1).reshape(1, -1)[0]
-        river = np.argwhere(self.Y == 2).reshape(1, -1)[0]
-        road = np.argwhere(self.Y == 3).reshape(1, -1)[0]
-        roof = np.argwhere(self.Y == 4).reshape(1, -1)[0]
+        Y_water = pd.Series(np.repeat(1, X_water.shape[0]))
+        Y_nonwater = pd.Series(np.repeat(0, X_nonwater.shape[0]))
 
-        farm_X = self.X[farm]
-        river_X = self.X[river]
-        road_X = self.X[road]
-        roof_X = self.X[roof]
+        original_X = pd.concat([X_water, X_nonwater])
+        training_Y = pd.concat([Y_water, Y_nonwater])
 
-        farm_y = self.Y[farm]
-        river_y = self.Y[river]
-        road_y = self.Y[road]
-        roof_y = self.Y[roof]
+        training_X = self.gen_features(original_X)
+        return training_X, training_Y
 
-        training_X = np.concatenate([farm_X, river_X, road_X, roof_X])
-        training_y = np.concatenate([farm_y, river_y, road_y, roof_y])
+    def read_bands_to_be_classified(self):
+        # for some bands, they have different resolution, so the samples number is not the same as others
+        exception_band = {'TM': ['6'], 'ETM': ['6', '8'], 'OLI': ['8', '10', '11']}
 
-        return training_X, training_y
+        attributes = []
+        values = []
+        band_files = [os.path.join(self.image_bands_dir, name) for name in os.listdir(self.image_bands_dir) if
+                      name.endswith('.tif') or name.endswith('.TIF')]
+        for band_file in band_files:
+            print(band_file)
+            band = re.findall(r'.*?_(B.*?).TIF', band_file)[0]
+
+            # for band6, its resolution is different with other bands
+            band_ok = True
+            for e_band in exception_band[self.sensor]:
+                if e_band in band:
+                    band_ok = False
+            if not band_ok:
+                continue
+
+            attributes.append(band)
+
+            raster = rasterio.open(band_file, 'r')
+            # reading test data using window ((row_start, row_stop), (col_start, col_stop))
+            # array = raster.read(1,window=((1000,1010),(3000,3006)))
+            array = raster.read(1)
+            row = array.shape[0]
+            col = array.shape[1]
+            values.append(array.reshape(-1, 1))
+        bands_num = len(attributes)
+        value_array = np.array(values)
+        resize_array = value_array.reshape(bands_num,-1)
+
+        X = pd.DataFrame(resize_array.T, columns=attributes)
+        print(X.shape)
+
+        return X, row, col
 
     def SVM(self):
-        if os.path.exists(self.file_root + '/results/Z_svm.npy'):
-            Z_SVM = np.load(self.file_root + '/results/Z_svm.npy')
+        model_npy = os.path.join(self.file_root, '/models/Z_svm.npy')
+        if os.path.exists(model_npy):
+            Z_SVM = np.load(model_npy)
         else:
             training_X, training_y = self.get_training_data()
             # SVM
+            print('begin training SVM model......')
             clf = svm.SVC()
             clf.fit(training_X, training_y)
-            Z_SVM = clf.predict(self.X).reshape(512, 512)
-            np.save(self.file_root + '/results/Z_svm.npy', Z_SVM)
+
+            print('reading image data %s to be processed....'% self.image_bands_dir.split('/')[-1])
+            X, row, col = self.read_bands_to_be_classified()
+            return X
+
+            print('using SVM model to predict the image.....')
+            Z_SVM = clf.predict(X).reshape(row, col)
+            np.save(model_npy, Z_SVM)
         return Z_SVM
 
     def RandomForest(self):
-        if os.path.exists(self.file_root + '/results/Z_random_forest.npy'):
-            Z_Random_Forest = np.load(self.file_root + '/results/Z_random_forest.npy')
+        model_npy = os.path.join(self.file_root + '/models/Z_random_forest.npy')
+        if os.path.exists(model_npy):
+            Z_Random_Forest = np.load(model_npy)
         else:
             training_X, training_y = self.get_training_data()
             # Random Forest
             clf = RandomForestClassifier(n_estimators=10, max_depth=None, min_samples_split=2, random_state=0)
             clf.fit(training_X, training_y)
             Z_Random_Forest = clf.predict(self.X).reshape(512, 512)
-            np.save(self.file_root + '/results/Z_random_forest.npy', Z_Random_Forest)
+            np.save(model_npy, Z_Random_Forest)
         return Z_Random_Forest
 
     def KNN(self, n_neighbors):
-        if os.path.exists(self.file_root + '/results/Z_knn%s.npy' % n_neighbors):
-            Z_KNN = np.load(self.file_root + '/results/Z_knn%s.npy' % n_neighbors)
+        model_npy = os.path.join(self.file_root, '/models/Z_knn%s.npy' % n_neighbors)
+        if os.path.exists(model_npy):
+            Z_KNN = np.load(model_npy)
         else:
             training_X, training_y = self.get_training_data()
             # Random Forest
             clf = KNeighborsClassifier(n_neighbors=n_neighbors)
             clf.fit(training_X, training_y)
             Z_KNN = clf.predict(self.X).reshape(512, 512)
-            np.save(self.file_root + '/results/Z_KNN_%s.npy' % n_neighbors, Z_KNN)
+            np.save(model_npy, Z_KNN)
         return Z_KNN
 
     def Kmeans(self):
-        if os.path.exists(self.file_root + '/results/Z_kmeans.npy'):
-            Z_KMeans = np.load(self.file_root + '/results/Z_kmeans.npy')
+        model_npy = os.path.join(self.file_root, '/models/Z_kmeans.npy')
+        if os.path.exists(model_npy):
+            Z_KMeans = np.load(model_npy)
         else:
             training_X, training_y = self.get_training_data()
             # K-means
             kmeans = KMeans(n_clusters=4, random_state=0).fit(training_X)
             Z_KMeans = kmeans.predict(self.X).reshape(512, 512)
-            np.save(self.file_root + '/results/Z_kmeans.npy', Z_KMeans)
+            np.save(model_npy, Z_KMeans)
         return Z_KMeans
 
     def plot_results(self):
@@ -392,10 +481,15 @@ def test_generate_training_data():
 
 def test_classification():
     file_root = '/mnt/win/water_paper/training_data/TM'
-    remote_class = Remote_Classification(file_root)
-    remote_class.plot_results()
+    images_to_be_classified = os.path.join(file_root, 'image/L5134036')
+    remote_class = Remote_Classification(file_root, images_to_be_classified, 'TM')
+    remote_class.SVM()
+
+    # X,Y = remote_class.get_training_data()
+    # print(X.shape)
+    # print(Y.shape)
 
 
 if __name__ == '__main__':
-    test_generate_training_data()
+    # test_generate_training_data()
     test_classification()
